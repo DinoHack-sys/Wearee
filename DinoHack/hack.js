@@ -33,6 +33,25 @@
                           runner.distanceMeter.config.COEFFICIENT : 0.025;
             
             runner.distanceRan += Number(distance) / (coeff || 0.025);
+            
+            if (runner.distanceMeter) {
+                const targetScoreStr = String(Math.floor(runner.distanceRan * (coeff || 0.025)));
+                const meterConfig = runner.distanceMeter.config || runner.distanceMeter.CONFIG || Runner.config?.RESOURCE_TEMPLATE_DATA;
+                
+                if (meterConfig) {
+                    const maxUnits = meterConfig.MAX_DISTANCE_UNITS || 5;
+                    if (targetScoreStr.length > maxUnits) {
+                        meterConfig.MAX_DISTANCE_UNITS = targetScoreStr.length;
+                    }
+                } else {
+                    runner.distanceMeter.maxDigits = targetScoreStr.length;
+                }
+                
+                if (typeof runner.distanceMeter.update === "function") {
+                    runner.distanceMeter.update(runner.distanceRan);
+                }
+            }
+            
             this.status();
         },
 
@@ -83,19 +102,26 @@
 
         off() {
             if (!this.enabled) return;
-            this.enabled = false;
+
+            if (this.manualControlActive) this.toggleControl(true);
+            if (this.isInvisible) this.toggleInvisibility(true);
+            if (this.isMoonGravity) this.moonGravity(true);
+            if (this.isWalkingInAir) this.walkHeight(0, true);
 
             clearInterval(this.autoJumpInterval);
             this.autoJumpInterval = null;
 
             if (runner._originalGameOver) Runner.prototype.gameOver = runner._originalGameOver;
-            
-            if (this.manualControlActive) this.toggleControl(true);
-            if (this.isInvisible) this.toggleInvisibility(true);
-            if (this.isMoonGravity) this.moonGravity(true);
-            if (this.isWalkingInAir) this.walkHeight(0, true);
             if (this._globalCheatKeyHandler) document.removeEventListener("keydown", this._globalCheatKeyHandler);
 
+            const meterConfig = runner.distanceMeter && (runner.distanceMeter.config || runner.distanceMeter.CONFIG);
+            if (meterConfig) {
+                meterConfig.MAX_DISTANCE_UNITS = 5;
+            } else if (runner.distanceMeter) {
+                runner.distanceMeter.maxDigits = 5;
+            }
+
+            this.enabled = false;
             this.speed(6);
 
             if (this._isStatusMenuRendered) {
@@ -109,7 +135,7 @@
         },
 
         speed(value) {
-            if (!this.enabled) {
+            if (!this.enabled && value !== 6) {
                 console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
                 return;
             }
@@ -129,7 +155,7 @@
             }
             
             runner.setSpeed(targetSpeed);
-            this.status();
+            if (this.enabled) this.status();
         },
 
         jumpHeight(value) {
@@ -157,7 +183,7 @@
         },
 
         toggleControl(silent = false) {
-            if (!this.enabled) {
+            if (!this.enabled && !silent) {
                 console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
                 return;
             }
@@ -208,7 +234,7 @@
         },
 
         walkHeight(offsetValue, silent = false) {
-            if (!this.enabled) {
+            if (!this.enabled && !silent) {
                 console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
                 return;
             }
@@ -218,7 +244,7 @@
         },
 
         toggleInvisibility(silent = false) {
-            if (!this.enabled) {
+            if (!this.enabled && !silent) {
                 console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
                 return;
             }
@@ -237,7 +263,7 @@
         },
 
         moonGravity(silent = false) {
-            if (!this.enabled) {
+            if (!this.enabled && !silent) {
                 console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
                 return;
             }
@@ -254,22 +280,32 @@
         },
 
         _setupGlobalCheatKeys() {
+            if (this._globalCheatKeyHandler) {
+                document.removeEventListener("keydown", this._globalCheatKeyHandler);
+            }
+
             this._globalCheatKeyHandler = (e) => {
-                if (!this.enabled) return;
-                
                 const key = e.key.toLowerCase();
+                const targetKeys = ["m", "i", "h", "k", "o"];
                 
-                if (key === "m") this.moonGravity();
-                if (key === "i") this.toggleInvisibility();
-                if (key === "h") {
-                    if (this.isWalkingInAir) {
-                        this.walkHeight(0);
-                    } else {
-                        this.walkHeight(40);
+                if (targetKeys.includes(key)) {
+                    if (!this.enabled) {
+                        console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
+                        return;
                     }
+                    
+                    if (key === "m") this.moonGravity();
+                    if (key === "i") this.toggleInvisibility();
+                    if (key === "h") {
+                        if (this.isWalkingInAir) {
+                            this.walkHeight(0);
+                        } else {
+                            this.walkHeight(40);
+                        }
+                    }
+                    if (key === "k") this.toggleControl();
+                    if (key === "o") this.status();
                 }
-                if (key === "k") this.toggleControl();
-                if (key === "o") this.status();
             };
             document.addEventListener("keydown", this._globalCheatKeyHandler);
         },
@@ -332,7 +368,7 @@
     };
 
     console.clear();
-    console.log("%c[!] Initializing DinoHack Kernel v4.19...", "color: #00ff00; font-family: monospace; font-weight: bold;");
+    console.log("%c[!] Initializing DinoHack Kernel v4.23...", "color: #00ff00; font-family: monospace; font-weight: bold;");
     
     const loadingLogs = [
         "[💡] Injecting core script into Runner instance...",
@@ -352,6 +388,7 @@
     const totalLoadingTime = (loadingLogs.length + 1) * 1200; 
 
     setTimeout(() => {
+        window.dinoHack._setupGlobalCheatKeys();
         window.dinoHack._renderMainManual();
     }, totalLoadingTime);
 })();
