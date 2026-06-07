@@ -41,7 +41,7 @@ eval(await(await fetch('https://raw.githubusercontent.com/DinoHack-sys/Wearee/re
 ### 🌐 Community
 
 * **Game URL**: [chrome://dino](https://www.google.com/search?q=chrome://dino)
-* **Developer**: `dnhck`
+* **Developer**: `Wearee`
 
 #MakeDinoBetterWithUs | #FeelsGood | #DinoGameGreatAgain
 
