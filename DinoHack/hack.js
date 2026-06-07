@@ -23,6 +23,479 @@
         _originalDraw: null,
         _defaultGroundY: 93,
         _isStatusMenuRendered: false,
+        _originalUpdate: null,
+
+        teleport(distance = 1000) {
+            if (!this.enabled) {
+                console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
+                return;
+            }
+            const coeff = runner.distanceMeter && runner.distanceMeter.config ? 
+                          runner.distanceMeter.config.COEFFICIENT : 0.025;
+            
+            runner.distanceRan += Number(distance) / (coeff || 0.025);
+            this._syncDistanceUnits();
+            this.status();
+        },
+
+        setHighScore(targetScore = 99999) {
+            if (!this.enabled) {
+                console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
+                return;
+            }
+            const coeff = runner.distanceMeter && runner.distanceMeter.config ? 
+                          runner.distanceMeter.config.COEFFICIENT : 0.025;
+            
+            const calculatedHighScoreDistance = Number(targetScore) / (coeff || 0.025);
+            runner.highestScore = calculatedHighScoreDistance;
+
+            if (runner.distanceMeter) {
+                const targetScoreStr = String(targetScore);
+                const meterConfig = runner.distanceMeter.config || runner.distanceMeter.CONFIG || Runner.config?.RESOURCE_TEMPLATE_DATA;
+                
+                if (meterConfig) {
+                    const maxUnits = meterConfig.MAX_DISTANCE_UNITS || 5;
+                    if (targetScoreStr.length > maxUnits) {
+                        meterConfig.MAX_DISTANCE_UNITS = targetScoreStr.length;
+                    }
+                } else {
+                    runner.distanceMeter.maxDigits = targetScoreStr.length;
+                }
+
+                if (typeof runner.distanceMeter.setHighScore === "function") {
+                    runner.distanceMeter.setHighScore(calculatedHighScoreDistance);
+                }
+            }
+            
+            this.status();
+        },
+
+        _syncDistanceUnits() {
+            if (runner.distanceMeter) {
+                const coeff = runner.distanceMeter.config ? runner.distanceMeter.config.COEFFICIENT : 0.025;
+                const targetScoreStr = String(Math.floor(runner.distanceRan * (coeff || 0.025)));
+                const meterConfig = runner.distanceMeter.config || runner.distanceMeter.CONFIG || Runner.config?.RESOURCE_TEMPLATE_DATA;
+                
+                if (meterConfig) {
+                    const maxUnits = meterConfig.MAX_DISTANCE_UNITS || 5;
+                    if (targetScoreStr.length > maxUnits) {
+                        meterConfig.MAX_DISTANCE_UNITS = targetScoreStr.length;
+                    }
+                } else {
+                    runner.distanceMeter.maxDigits = targetScoreStr.length;
+                }
+                
+                if (typeof runner.distanceMeter.update === "function") {
+                    runner.distanceMeter.update(runner.distanceRan);
+                }
+            }
+        },
+
+        on() {
+            if (this.enabled) return;
+            this.enabled = true;
+
+            if (!runner._originalGameOver) runner._originalGameOver = Runner.prototype.gameOver;
+            Runner.prototype.gameOver = function(){}; 
+
+            this.autoJumpInterval = setInterval(() => {
+                if (this.manualControlActive) return;
+
+                const obstacles = runner.horizon.obstacles;
+                if (obstacles.length > 0) {
+                    const obstacle = obstacles[0];
+                    
+                    let multiplier = 9.5;
+                    if (runner.currentSpeed < 10) {
+                        multiplier = 18.0;
+                    } else if (runner.currentSpeed < 15) {
+                        multiplier = 13.0;
+                    }
+                    
+                    const safeTriggerDistance = runner.currentSpeed * multiplier; 
+                    const isBird = obstacle.typeConfig && obstacle.typeConfig.type === "PTERODACTYL";
+                    
+                    const dinoHeight = runner.tRex.config ? runner.tRex.config.HEIGHT : 47;
+                    const isHighBird = isBird && (obstacle.yPos + (obstacle.typeConfig.height || 40) < runner.tRex.groundYPos - dinoHeight + 10);
+                    const isDuckBird = isBird && !isHighBird && (obstacle.yPos > runner.tRex.groundYPos - dinoHeight);
+
+                    if (obstacle.xPos > 0 && obstacle.xPos < safeTriggerDistance) {
+                        if (!runner.tRex.jumping && !runner.tRex.ducking) {
+                            if (isHighBird) {
+                                return; 
+                            } else if (isDuckBird) {
+                                this.duck(500);
+                            } else {
+                                this.jump();
+                            }
+                        }
+                    }
+                }
+            }, 4);
+
+            this._hookRadar();
+            this._setupGlobalCheatKeys();
+            console.log("%c[DinoHack] Main System: ACTIVE (God Mode & Multi-ESP Radar ON)", "color: #00ff00; font-weight: bold;");
+        },
+
+        off() {
+            if (!this.enabled) return;
+
+            if (this.manualControlActive) this.toggleControl(true);
+            if (this.isInvisible) this.toggleInvisibility(true);
+            if (this.isMoonGravity) this.moonGravity(true);
+            if (this.isWalkingInAir) this.walkHeight(0, true);
+
+            clearInterval(this.autoJumpInterval);
+            this.autoJumpInterval = null;
+
+            if (runner._originalGameOver) Runner.prototype.gameOver = runner._originalGameOver;
+            if (this._globalCheatKeyHandler) document.removeEventListener("keydown", this._globalCheatKeyHandler);
+            this._unhookRadar();
+
+            const meterConfig = runner.distanceMeter && (runner.distanceMeter.config || runner.distanceMeter.CONFIG);
+            if (meterConfig) {
+                meterConfig.MAX_DISTANCE_UNITS = 5;
+            } else if (runner.distanceMeter) {
+                runner.distanceMeter.maxDigits = 5;
+            }
+
+            this.enabled = false;
+            this.speed(6);
+
+            if (this._isStatusMenuRendered) {
+                console.clear();
+                this._renderMainManual();
+                console.log("%c[DinoHack] Main System: DISABLED (Config Restored)", "color: #ff0000; font-weight: bold;");
+            } else {
+                console.log("%c[DinoHack] Main System: DISABLED", "color: #ff0000; font-weight: bold;");
+            }
+            this._isStatusMenuRendered = false;
+        },
+
+        _hookRadar() {
+            if (!this._originalUpdate) {
+                this._originalUpdate = runner.update;
+                const self = this;
+                runner.update = function() {
+                    self._originalUpdate.apply(this, arguments);
+                    if (self.enabled && runner.horizon && runner.horizon.obstacles.length > 0) {
+                        const ctx = runner.canvasCtx;
+                        if (ctx) {
+                            ctx.save();
+                            ctx.lineWidth = 1.5;
+                            ctx.strokeStyle = "rgba(0, 255, 0, 0.85)";
+                            ctx.fillStyle = "rgba(0, 255, 0, 0.08)";
+                            ctx.font = "9px monospace";
+                            
+                            runner.horizon.obstacles.forEach((obstacle) => {
+                                const x = obstacle.xPos;
+                                const y = obstacle.yPos;
+                                const w = obstacle.typeConfig ? obstacle.typeConfig.width * (obstacle.size || 1) : 30;
+                                const h = obstacle.typeConfig ? obstacle.typeConfig.height : 40;
+                                if (x > -w && x < (runner.dimensions?.WIDTH || 600)) {
+                                    ctx.strokeRect(x, y, w, h);
+                                    ctx.fillRect(x, y, w, h);
+                                    ctx.fillStyle = "rgba(0, 255, 0, 0.85)";
+                                    ctx.fillText(`${Math.floor(x)}px`, x, y - 4);
+                                }
+                            });
+                            ctx.restore();
+                        }
+                    }
+                };
+            }
+        },
+
+        _unhookRadar() {
+            if (this._originalUpdate) {
+                runner.update = this._originalUpdate;
+                this._originalUpdate = null;
+            }
+        },
+
+        speed(value) {
+            if (!this.enabled && value !== 6) {
+                console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
+                return;
+            }
+            
+            if (this.manualControlActive) {
+                this._savedSpeed = Number(value);
+                this.status();
+                return;
+            }
+
+            const targetSpeed = Number(value);
+            if (runner.currentSpeed > 15 && targetSpeed <= 10) {
+                runner.horizon.obstacles = [];
+                if (runner.horizon && typeof runner.horizon.reset === "function") {
+                    runner.horizon.reset();
+                }
+            }
+            
+            runner.setSpeed(targetSpeed);
+            if (this.enabled) this.status();
+        },
+
+        jumpHeight(value) {
+            if (!this.enabled) {
+                console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
+                return;
+            }
+            runner.tRex.config.INIITAL_JUMP_VELOCITY = -Number(value); 
+            this.status();
+        },
+
+        jump() {
+            if (!runner.tRex.jumping && !runner.tRex.ducking) {
+                runner.tRex.startJump(runner.currentSpeed || 6);
+            }
+        },
+
+        duck(duration = 400) {
+            if (!runner.tRex.jumping && !runner.tRex.ducking) {
+                runner.tRex.setDuck(true);
+                setTimeout(() => {
+                    runner.tRex.setDuck(false);
+                }, duration);
+            }
+        },
+
+        toggleControl(silent = false) {
+            if (!this.enabled && !silent) {
+                console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
+                return;
+            }
+
+            this.manualControlActive = !this.manualControlActive;
+
+            if (this.manualControlActive) {
+                this._savedSpeed = runner.currentSpeed || 6;
+                this._lockedSpeed = 0;
+
+                Object.defineProperty(runner, 'currentSpeed', {
+                    get: () => { return this._lockedSpeed; },
+                    set: (value) => {},
+                    configurable: true
+                });
+
+                this._keydownHandler = (e) => {
+                    if (e.key === "ArrowRight") {
+                        this._lockedSpeed = this._savedSpeed;
+                    } else if (e.key === "ArrowLeft") {
+                        this._lockedSpeed = -this._savedSpeed;
+                    } else if (e.key === "ArrowUp") {
+                        this.jump();
+                    } else if (e.key === "ArrowDown") {
+                        runner.tRex.setDuck(true);
+                    }
+                };
+
+                this._keyupHandler = (e) => {
+                    if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+                        this._lockedSpeed = 0;
+                    } else if (e.key === "ArrowDown") {
+                        runner.tRex.setDuck(false);
+                    }
+                };
+
+                document.addEventListener("keydown", this._keydownHandler);
+                document.addEventListener("keyup", this._keyupHandler);
+            } else {
+                document.removeEventListener("keydown", this._keydownHandler);
+                document.removeEventListener("keyup", this._keyupHandler);
+
+                delete runner.currentSpeed; 
+                runner.setSpeed(this._savedSpeed);
+            }
+
+            if (!silent) this.status();
+        },
+
+        walkHeight(offsetValue, silent = false) {
+            if (!this.enabled && !silent) {
+                console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
+                return;
+            }
+            runner.tRex.groundYPos = this._defaultGroundY - Number(offsetValue);
+            this.isWalkingInAir = Number(offsetValue) > 0;
+            if (!silent) this.status();
+        },
+
+        toggleInvisibility(silent = false) {
+            if (!this.enabled && !silent) {
+                console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
+                return;
+            }
+
+            this.isInvisible = !this.isInvisible;
+            runner.tRex.alpha = this.isInvisible ? 0 : 1;
+            
+            if (!silent) this.status();
+        },
+
+        moonGravity(silent = false) {
+            if (!this.enabled && !silent) {
+                console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
+                return;
+            }
+
+            this.isMoonGravity = !this.isMoonGravity;
+
+            const targetGravity = this.isMoonGravity ? 0.2 : 0.6;
+            Object.assign(runner.tRex.config, { 
+                GRAVITY: targetGravity, 
+                gravity: targetGravity 
+            });
+            
+            if (!silent) this.status();
+        },
+
+        _setupGlobalCheatKeys() {
+            if (this._globalCheatKeyHandler) {
+                document.removeEventListener("keydown", this._globalCheatKeyHandler);
+            }
+
+            this._globalCheatKeyHandler = (e) => {
+                if (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
+                
+                const key = e.key.toLowerCase();
+                const targetKeys = ["m", "i", "h", "k", "o"];
+                
+                if (targetKeys.includes(key)) {
+                    if (!this.enabled) {
+                        console.log("%c[DinoHack] Access Denied: Please run dinoHack.on() first!", "color: #ff0000; font-weight: bold;");
+                        return;
+                    }
+                    
+                    if (key === "m") this.moonGravity();
+                    if (key === "i") this.toggleInvisibility();
+                    if (key === "h") {
+                        if (this.isWalkingInAir) {
+                            this.walkHeight(0);
+                        } else {
+                            this.walkHeight(40);
+                        }
+                    }
+                    if (key === "k") this.toggleControl();
+                    if (key === "o") this.status();
+                }
+            };
+            document.addEventListener("keydown", this._globalCheatKeyHandler);
+        },
+
+        _renderMainManual() {
+            const manuals = [
+                "===========================================================",
+                "                 🦖 DINOHACK SYSTEM MANUAL 🦖              ",
+                "===========================================================",
+                " Type the following commands in console and press Enter:   ",
+                "                                                           ",
+                "  dinoHack.on()              -> Enable God Mode & Auto Jump",
+                "  dinoHack.off()             -> Disable All Hack Features  ",
+                "  dinoHack.speed(x)          -> Modify Dino Speed (e.g. 30)",
+                "  dinoHack.jumpHeight(x)     -> Modify Jump Force (e.g. 15)",
+                "  dinoHack.teleport(x)       -> Add Jumps to Display Score ",
+                "  dinoHack.setHighScore(x)   -> Force Save Permanent HI-Score",
+                "                                                           ",
+                " *GLOBAL HOTKEYS (Active immediately after dinoHack.on()): ",
+                "  Press [ K ] -> TOGGLE Total Manual Simulator Mode        ",
+                "  Press [ O ] -> CLEAR CONSOLE & RENDER CURRENT STATUS LOG  ",
+                "  Press [ M ] -> TOGGLE Moon Gravity Mode (Float)          ",
+                "  Press [ I ] -> TOGGLE Invisibility Mode (Night Compatible)",
+                "  Press [ H ] -> TOGGLE Walk in Air Mode (Levitate 40px)   ",
+                "-----------------------------------------------------------",
+                " 📢 INFO: Pressing hotkeys will automatically clear the    ",
+                " console screen and refresh the configurations panel       ",
+                " in real-time so you always see your active attributes.     ",
+                "==========================================================="
+            ];
+            manuals.forEach((line) => {
+                if (line.includes("🦖") || line.includes("===")) {
+                    console.log(`%c${line}`, "color: #00ff00; font-weight: bold; font-family: monospace;");
+                } else if (line.includes("dinoHack.") || line.includes("Press [")) {
+                    console.log(`%c${line}`, "color: #ffff00; font-family: monospace;");
+                } else {
+                    console.log(`%c${line}`, "color: #ffffff; font-family: monospace;");
+                }
+            });
+        }
+    };
+
+    console.clear();
+    console.log("%c[✓] Initializing DinoHack Ultimate Kernel v4.34...", "color: #00ff00; font-family: monospace; font-weight: bold; font-size: 13px;");
+    console.log("%c----------------------------------------------------", "color: #00ff00; font-family: monospace;");
+
+    const cyberLogs = [
+        { text: "[~] CONNECTING TO EXPLOIT VECTOR... OK", type: "warn" },
+        { text: "[i] SEARCHING MEMORY SPACE FOR BASE POINTERS...", type: "info" },
+        { text: "[+] MATCH FOUND: Runner instance mapped at 0x7FFA2B1C00F4", type: "success" },
+        { text: "[~] ALLOCATING EXPLOIT BUFFER [MEM_COMMIT | PAGE_EXECUTE_READWRITE]", type: "warn" },
+        { text: "[i] INJECTING RUNTIME PATCH: Overwriting 0x0045A9B0 (mov al, 01)...", type: "info" },
+        { text: "[+] PATCH APPLIED: Integrity checks decoupled successfully.", type: "success" },
+        { text: "[~] ATTACHING INTERRUPT LAYER TO CONSOLE KEYBOARD BUFFER...", type: "warn" },
+        { text: "[+] VECTOR ATTACHED: Keyboard listeners synchronized.", type: "success" },
+        { text: "[i] CORRUPTING DistanceMeter.prototype REKORD POINTER...", type: "info" },
+        { text: "[+] INJECTION COMPLETED: Memory pages locked and flushed.", type: "success" }
+    ];
+
+    let accumulatedDelay = 0;
+
+    cyberLogs.forEach((log) => {
+        const stepDelay = Math.floor(Math.random() * 800) + 150;
+        accumulatedDelay += stepDelay;
+
+        setTimeout(() => {
+            if (log.type === "success") {
+                console.log(`%c${log.text}`, "color: #55ff55; font-family: monospace; font-weight: bold;");
+            } else if (log.type === "warn") {
+                console.log(`%c${log.text}`, "color: #ffff55; font-family: monospace;");
+            } else {
+                console.log(`%c${log.text}`, "color: #00bb00; font-family: monospace;");
+            }
+        }, accumulatedDelay);
+    });
+
+    setTimeout(() => {
+        window.dinoHack._setupGlobalCheatKeys();
+        console.log("\n%c>>> KERNEL EXECUTION SUCCESSFUL: DINO_HACK STATUS: READY", "color: #00ffff; font-family: monospace; font-weight: bold; text-shadow: 0 0 5px #00ffff; font-size: 13px;");
+        console.log("\n");
+        window.dinoHack._renderMainManual();
+    }, accumulatedDelay + 500);
+
+})();
+
+
+
+
+/* Old data/Old Function Before Kernel 4.34
+
+/* (function() {
+    const runner = Runner.instance_ || Runner.getInstance();
+
+    if (!runner) {
+        console.error("Dino game not found! Please open chrome://dino first.");
+        return;
+    }
+
+    if (window.dinoHack) {
+        console.log("DinoHack is already installed.");
+        return;
+    }
+
+    window.dinoHack = {
+        enabled: false,
+        autoJumpInterval: null,
+        manualControlActive: false,
+        isInvisible: false,
+        isMoonGravity: false,
+        isWalkingInAir: false,
+        _lockedSpeed: 0,
+        _savedSpeed: 6,
+        _originalDraw: null,
+        _defaultGroundY: 93,
+        _isStatusMenuRendered: false,
 
         teleport(distance = 1000) {
             if (!this.enabled) {
